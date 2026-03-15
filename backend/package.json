@@ -4,7 +4,7 @@
   "description": "CRM Helpdesk Backend - NestJS + Prisma",
   "scripts": {
     "build": "nest build",
-    "start": "node dist/main",
+    "start": "node dist/src/main",
     "start:dev": "nest start --watch",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
