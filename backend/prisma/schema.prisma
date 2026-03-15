@@ -1,0 +1,283 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  AGENT
+  VIEWER
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  PENDING_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+// ─────────────────────────────────────────────
+// TENANT (multi-tenancy root)
+// ─────────────────────────────────────────────
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("free")
+  settings  Json     @default("{}")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users            User[]
+  tickets          Ticket[]
+  apiKeys          ApiKey[]
+  webhooks         Webhook[]
+  slaProfiles      SlaProfile[]
+  customFields     TicketFieldDefinition[]
+  auditLogs        AuditLog[]
+}
+
+// ─────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────
+
+model User {
+  id                String    @id @default(uuid())
+  tenantId          String
+  email             String
+  passwordHash      String
+  name              String
+  role              UserRole  @default(AGENT)
+  isActive          Boolean   @default(true)
+  twoFactorEnabled  Boolean   @default(false)
+  twoFactorSecret   String?
+  recoveryCodes     String[]  @default([])
+  lastLoginAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTickets Ticket[]       @relation("AssignedTickets")
+  createdTickets  Ticket[]       @relation("CreatedTickets")
+  messages        Message[]
+  auditLogs       AuditLog[]
+  refreshTokens   RefreshToken[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+// ─────────────────────────────────────────────
+// TICKET
+// ─────────────────────────────────────────────
+
+model Ticket {
+  id              String       @id @default(uuid())
+  tenantId        String
+  number          Int
+  title           String
+  description     String
+  status          TicketStatus @default(OPEN)
+  priority        Priority     @default(MEDIUM)
+  assigneeId      String?
+  createdById     String
+  customerEmail   String?
+  customerName    String?
+  customerPhone   String?
+  tags            String[]     @default([])
+  customFields    Json         @default("{}")
+  version         Int          @default(1)
+  slaBreachAt     DateTime?
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignee  User?     @relation("AssignedTickets", fields: [assigneeId], references: [id])
+  createdBy User      @relation("CreatedTickets", fields: [createdById], references: [id])
+  messages  Message[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, assigneeId])
+  @@index([tenantId, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// MESSAGE (ticket thread)
+// ─────────────────────────────────────────────
+
+model Message {
+  id          String   @id @default(uuid())
+  tenantId    String
+  ticketId    String
+  authorId    String?
+  authorType  String   @default("agent") // "agent" | "customer" | "system"
+  content     String
+  isInternal  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User?  @relation(fields: [authorId], references: [id])
+
+  @@index([tenantId, ticketId])
+}
+
+// ─────────────────────────────────────────────
+// API KEY
+// ─────────────────────────────────────────────
+
+model ApiKey {
+  id         String    @id @default(uuid())
+  tenantId   String
+  name       String
+  keyHash    String    @unique
+  keyPrefix  String    // First 8 chars shown in UI (e.g. "crm_abc1")
+  scopes     String[]  @default(["read:tickets", "write:tickets"])
+  isActive   Boolean   @default(true)
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// ─────────────────────────────────────────────
+// WEBHOOK
+// ─────────────────────────────────────────────
+
+model Webhook {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  url       String
+  events    String[] @default([]) // ["ticket.created", "ticket.updated", "ticket.resolved"]
+  secret    String   // HMAC-SHA256 signing secret
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// ─────────────────────────────────────────────
+// SLA PROFILE
+// ─────────────────────────────────────────────
+
+model SlaProfile {
+  id                 String   @id @default(uuid())
+  tenantId           String
+  name               String
+  priority           Priority
+  firstResponseHours Int
+  resolutionHours    Int
+  businessHoursOnly  Boolean  @default(true)
+  businessHoursStart Int      @default(9)  // 9 AM
+  businessHoursEnd   Int      @default(18) // 6 PM
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, priority])
+  @@index([tenantId])
+}
+
+// ─────────────────────────────────────────────
+// CUSTOM FIELD DEFINITIONS
+// ─────────────────────────────────────────────
+
+model TicketFieldDefinition {
+  id         String   @id @default(uuid())
+  tenantId   String
+  fieldName  String
+  fieldType  String   // "text" | "number" | "date" | "select" | "boolean"
+  label      String
+  isRequired Boolean  @default(false)
+  options    Json?    // For select: [{ value, label }]
+  order      Int      @default(0)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, fieldName])
+  @@index([tenantId])
+}
+
+// ─────────────────────────────────────────────
+// REFRESH TOKEN
+// ─────────────────────────────────────────────
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  userId     String
+  tokenHash  String   @unique
+  isRevoked  Boolean  @default(false)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// AUDIT LOG (append-only)
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  tenantId     String
+  userId       String?
+  action       String   // "ticket.created", "user.login", "export.triggered", etc.
+  resourceId   String?
+  resourceType String?
+  metadata     Json?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, userId])
+  @@index([tenantId, action])
+}
+
+// ─────────────────────────────────────────────
+// TENANT COUNTER (for sequential ticket numbers)
+// ─────────────────────────────────────────────
+
+model TenantCounter {
+  tenantId      String @id
+  ticketCounter Int    @default(0)
+}

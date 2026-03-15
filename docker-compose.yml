@@ -1,0 +1,83 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: crm_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crm_user
+      POSTGRES_PASSWORD: crm_secret_password
+      POSTGRES_DB: crm_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm_user -d crm_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: crm_redis
+    restart: unless-stopped
+    command: redis-server --requirepass crm_redis_secret
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "crm_redis_secret", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: crm_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://crm_user:crm_secret_password@postgres:5432/crm_db
+      REDIS_URL: redis://:crm_redis_secret@redis:6379
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production-min-32-chars
+      JWT_EXPIRES_IN: 15m
+      JWT_REFRESH_SECRET: your-refresh-secret-key-change-in-production-min-32-chars
+      JWT_REFRESH_EXPIRES_IN: 7d
+      FRONTEND_URL: http://localhost:3000
+      PORT: 3001
+      NODE_ENV: development
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: crm_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+
+volumes:
+  postgres_data:
+  redis_data:
