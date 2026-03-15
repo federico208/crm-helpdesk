@@ -2,6 +2,9 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# OpenSSL needed by Prisma on Alpine
+RUN apk add --no-cache openssl
+
 COPY package*.json ./
 RUN npm ci --legacy-peer-deps
 
@@ -14,6 +17,9 @@ RUN npm run build
 FROM node:20-alpine AS production
 
 WORKDIR /app
+
+# OpenSSL needed by Prisma on Alpine
+RUN apk add --no-cache openssl
 
 COPY package*.json ./
 RUN npm ci --only=production --legacy-peer-deps
